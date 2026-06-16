@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Constitution Study Coach — AZ & US",
+  "version": "1.0.0",
+  "description": "Quick-reference summaries of the U.S. and Arizona Constitutions for self-study (NPC civics requirement).",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Constitution Study Coach"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

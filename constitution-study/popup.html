@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Constitution Study Coach</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <h1>📜 Constitution Study Coach</h1>
+    <p class="sub">Quick summaries · AZ &amp; US · NPC civics</p>
+  </header>
+
+  <div class="tabs">
+    <button class="tab active" data-set="us">U.S. Constitution</button>
+    <button class="tab" data-set="az">Arizona Constitution</button>
+  </div>
+
+  <input id="search" type="search" placeholder="Search topics, amendments, terms…" autocomplete="off" />
+
+  <div id="list"></div>
+
+  <footer>
+    <span id="count"></span>
+    <span class="disclaimer">Study aid only — verify exact wording against the official text.</span>
+  </footer>
+
+  <script src="data.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

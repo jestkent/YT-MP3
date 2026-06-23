@@ -1,0 +1,12 @@
+# Core
+anthropic>=0.40.0      # Claude API for script + metadata generation
+Pillow>=10.0.0         # scene cards / thumbnails
+gTTS>=2.5.0            # text-to-speech voiceover (needs internet)
+
+# Optional offline TTS fallback (used automatically if gTTS is unavailable)
+# pyttsx3>=2.90
+
+# System dependency (NOT pip-installable): ffmpeg + ffprobe must be on PATH.
+#   macOS:   brew install ffmpeg
+#   Ubuntu:  sudo apt install ffmpeg
+#   Windows: https://www.gyan.dev/ffmpeg/builds/ then add bin/ to PATH

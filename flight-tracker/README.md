@@ -7,7 +7,7 @@ See [`PLAN.md`](./PLAN.md) for the full architecture and roadmap.
 ## Status
 
 - **M0 — Scaffold ✅** Next.js + TypeScript app, full-screen MapLibre dark map.
-- M1 — Data layer (OpenSky provider, `/api/positions`).
+- **M1 — Data layer ✅** Pluggable `FlightProvider` (`opensky` / `mock` / `flightaware`), `/api/positions?bbox`, aircraft rendered as heading-rotated icons with polling + click popups.
 - M2 — Realtime (background poller + SSE + smooth interpolation).
 - M3 — FlightAware AeroAPI provider.
 - M4 — Polish.

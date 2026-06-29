@@ -21,7 +21,7 @@ export default function Home() {
           ✈ Realtime Flight Tracker
         </div>
         <div style={{ fontSize: 12, opacity: 0.6, marginTop: 2 }}>
-          M0 · map scaffold
+          M1 · live positions
         </div>
       </header>
       <FlightMap />

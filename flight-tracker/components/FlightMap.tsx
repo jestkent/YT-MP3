@@ -34,13 +34,32 @@ const DARK_STYLE: StyleSpecification = {
 
 const DEFAULT_CENTER: [number, number] = [8, 49];
 const DEFAULT_ZOOM = 5;
-const POLL_MS = 5000; // raise to >=10000 for live OpenSky to respect rate limits
 
 type Status = {
   provider: string;
   count: number;
   updated: number | null;
+  connected: boolean;
   error: string | null;
+};
+
+type StreamSnapshot = {
+  provider: string;
+  intervalMs: number;
+  aircraft: Aircraft[];
+};
+
+// Per-aircraft interpolation state: glide from (s) toward (t) starting at `start`.
+type Track = {
+  cLng: number;
+  cLat: number;
+  sLng: number;
+  sLat: number;
+  tLng: number;
+  tLat: number;
+  start: number;
+  heading: number;
+  props: Aircraft;
 };
 
 /** Draw a north-pointing arrow once and register it as a map icon. */
@@ -53,10 +72,10 @@ function addPlaneIcon(map: MapLibreMap) {
   const ctx = cnv.getContext("2d");
   if (!ctx) return;
   ctx.beginPath();
-  ctx.moveTo(size / 2, 2); // nose (north)
-  ctx.lineTo(size * 0.82, size - 4); // right tail
-  ctx.lineTo(size / 2, size * 0.72); // notch
-  ctx.lineTo(size * 0.18, size - 4); // left tail
+  ctx.moveTo(size / 2, 2);
+  ctx.lineTo(size * 0.82, size - 4);
+  ctx.lineTo(size / 2, size * 0.72);
+  ctx.lineTo(size * 0.18, size - 4);
   ctx.closePath();
   ctx.fillStyle = "#ffd23f";
   ctx.fill();
@@ -66,16 +85,7 @@ function addPlaneIcon(map: MapLibreMap) {
   map.addImage("plane", ctx.getImageData(0, 0, size, size), { pixelRatio: 2 });
 }
 
-function toFeatureCollection(aircraft: Aircraft[]) {
-  return {
-    type: "FeatureCollection" as const,
-    features: aircraft.map((a) => ({
-      type: "Feature" as const,
-      geometry: { type: "Point" as const, coordinates: [a.lon, a.lat] },
-      properties: { ...a },
-    })),
-  };
-}
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 export default function FlightMap() {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -84,13 +94,18 @@ export default function FlightMap() {
     provider: "—",
     count: 0,
     updated: null,
+    connected: false,
     error: null,
   });
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
     let cancelled = false;
-    let timer: ReturnType<typeof setInterval> | undefined;
+    let raf = 0;
+    let es: EventSource | null = null;
+    let resubTimer: ReturnType<typeof setTimeout> | undefined;
+    const tracks = new Map<string, Track>();
+    let durationMs = 20000;
 
     (async () => {
       const maplibregl = (await import("maplibre-gl")).default;
@@ -107,7 +122,62 @@ export default function FlightMap() {
       map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
       map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
 
-      async function refresh() {
+      // Apply a server snapshot: retarget existing tracks, add new, drop gone.
+      function applySnapshot(snap: StreamSnapshot) {
+        durationMs = Math.max(1000, snap.intervalMs);
+        const now = performance.now();
+        const seen = new Set<string>();
+        for (const a of snap.aircraft) {
+          seen.add(a.id);
+          const prev = tracks.get(a.id);
+          if (prev) {
+            prev.sLng = prev.cLng;
+            prev.sLat = prev.cLat;
+            prev.tLng = a.lon;
+            prev.tLat = a.lat;
+            prev.start = now;
+            prev.heading = a.heading;
+            prev.props = a;
+          } else {
+            tracks.set(a.id, {
+              cLng: a.lon, cLat: a.lat,
+              sLng: a.lon, sLat: a.lat,
+              tLng: a.lon, tLat: a.lat,
+              start: now, heading: a.heading, props: a,
+            });
+          }
+        }
+        for (const id of tracks.keys()) if (!seen.has(id)) tracks.delete(id);
+        setStatus((s) => ({
+          ...s,
+          provider: snap.provider,
+          count: snap.aircraft.length,
+          updated: Date.now(),
+          error: null,
+        }));
+      }
+
+      // Animation loop: ease each track from s->t over the poll interval.
+      function tick() {
+        const now = performance.now();
+        const features = [];
+        for (const tr of tracks.values()) {
+          const t = Math.min(1, (now - tr.start) / durationMs);
+          tr.cLng = lerp(tr.sLng, tr.tLng, t);
+          tr.cLat = lerp(tr.sLat, tr.tLat, t);
+          features.push({
+            type: "Feature" as const,
+            geometry: { type: "Point" as const, coordinates: [tr.cLng, tr.cLat] },
+            properties: { ...tr.props, heading: tr.heading },
+          });
+        }
+        const src = map.getSource("aircraft") as GeoJSONSource | undefined;
+        src?.setData({ type: "FeatureCollection", features });
+        raf = requestAnimationFrame(tick);
+      }
+
+      function subscribe() {
+        es?.close();
         const b = map.getBounds();
         const params = new URLSearchParams({
           minLat: String(b.getSouth()),
@@ -115,36 +185,25 @@ export default function FlightMap() {
           maxLat: String(b.getNorth()),
           maxLon: String(b.getEast()),
         });
-        try {
-          const res = await fetch(`/api/positions?${params}`, { cache: "no-store" });
-          const json = await res.json();
-          if (cancelled) return;
-          if (!res.ok) {
-            setStatus((s) => ({ ...s, error: json.error || `HTTP ${res.status}` }));
-            return;
+        es = new EventSource(`/api/stream?${params}`);
+        es.addEventListener("open", () =>
+          setStatus((s) => ({ ...s, connected: true, error: null }))
+        );
+        es.addEventListener("positions", (ev) => {
+          try {
+            applySnapshot(JSON.parse((ev as MessageEvent).data));
+          } catch {
+            /* ignore malformed frame */
           }
-          const src = map.getSource("aircraft") as GeoJSONSource | undefined;
-          src?.setData(toFeatureCollection(json.aircraft));
-          setStatus({
-            provider: json.provider,
-            count: json.count,
-            updated: Date.now(),
-            error: null,
-          });
-        } catch (e) {
-          if (!cancelled) {
-            setStatus((s) => ({
-              ...s,
-              error: e instanceof Error ? e.message : "fetch failed",
-            }));
-          }
-        }
+        });
+        es.addEventListener("error", () =>
+          setStatus((s) => ({ ...s, connected: false }))
+        );
       }
 
       let started = false;
       const setup = () => {
         if (cancelled || started) return;
-        // addSource/addLayer throw until the style spec is parsed.
         if (!map.getStyle()) throw new Error("style not ready");
         started = true;
         addPlaneIcon(map);
@@ -161,14 +220,7 @@ export default function FlightMap() {
             "icon-rotate": ["get", "heading"],
             "icon-rotation-alignment": "map",
             "icon-allow-overlap": true,
-            "icon-size": [
-              "interpolate",
-              ["linear"],
-              ["zoom"],
-              3, 0.5,
-              7, 0.8,
-              11, 1.15,
-            ],
+            "icon-size": ["interpolate", ["linear"], ["zoom"], 3, 0.5, 7, 0.8, 11, 1.15],
           },
         });
 
@@ -194,15 +246,15 @@ export default function FlightMap() {
           map.getCanvas().style.cursor = "";
         });
 
-        refresh();
-        map.on("moveend", refresh);
-        timer = setInterval(refresh, POLL_MS);
+        subscribe();
+        map.on("moveend", () => {
+          if (resubTimer) clearTimeout(resubTimer);
+          resubTimer = setTimeout(subscribe, 300);
+        });
+        raf = requestAnimationFrame(tick);
       };
 
-      // Start as soon as the style spec is parsed. We retry rather than wait
-      // for the "load" event, because "load" (and isStyleLoaded) also block on
-      // basemap tiles finishing — so aircraft would never appear if tiles are
-      // slow or unreachable. addSource throws until the style is ready; retry.
+      // Start once the style spec is parsed, independent of basemap tiles.
       const startWhenReady = (attempt = 0) => {
         if (cancelled || started) return;
         try {
@@ -217,7 +269,9 @@ export default function FlightMap() {
 
     return () => {
       cancelled = true;
-      if (timer) clearInterval(timer);
+      if (raf) cancelAnimationFrame(raf);
+      if (resubTimer) clearTimeout(resubTimer);
+      es?.close();
       mapRef.current?.remove();
       mapRef.current = null;
     };
@@ -244,24 +298,33 @@ export default function FlightMap() {
           padding: "8px 12px",
           fontSize: 12,
           lineHeight: 1.5,
-          minWidth: 150,
+          minWidth: 160,
         }}
       >
-        <div>
-          <span style={{ opacity: 0.6 }}>source</span>{" "}
-          <strong>{status.provider}</strong>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              background: status.connected ? "#3ddc84" : "#ff7a7a",
+              boxShadow: status.connected ? "0 0 6px #3ddc84" : "none",
+            }}
+          />
+          <span style={{ opacity: 0.6 }}>stream</span>{" "}
+          <strong>{status.connected ? "live" : "offline"}</strong>
         </div>
         <div>
-          <span style={{ opacity: 0.6 }}>aircraft</span>{" "}
-          <strong>{status.count}</strong>
+          <span style={{ opacity: 0.6 }}>source</span> <strong>{status.provider}</strong>
+        </div>
+        <div>
+          <span style={{ opacity: 0.6 }}>aircraft</span> <strong>{status.count}</strong>
         </div>
         <div>
           <span style={{ opacity: 0.6 }}>updated</span> {ago}
         </div>
         {status.error && (
-          <div style={{ color: "#ff7a7a", marginTop: 4, maxWidth: 220 }}>
-            {status.error}
-          </div>
+          <div style={{ color: "#ff7a7a", marginTop: 4, maxWidth: 220 }}>{status.error}</div>
         )}
       </div>
     </>

@@ -1,6 +1,8 @@
 import type { Aircraft, BBox } from "@/lib/types";
 import { OpenSkyProvider } from "./opensky";
 import { MockProvider } from "./mock";
+import { FlightAwareProvider } from "./flightaware";
+import { FallbackProvider } from "./fallback";
 
 /** Pluggable source of live aircraft positions. */
 export interface FlightProvider {
@@ -11,10 +13,14 @@ export interface FlightProvider {
 let cached: FlightProvider | null = null;
 
 /**
- * Selects the provider from DATA_PROVIDER env var.
+ * Selects the provider from DATA_PROVIDER env var:
  *   opensky     -> free OpenSky Network (default)
  *   mock        -> synthetic offline data (no network)
- *   flightaware -> AeroAPI (added in M3); falls back to mock until implemented
+ *   flightaware -> FlightAware AeroAPI (paid)
+ *
+ * For flightaware, AERO_FALLBACK (default "opensky") picks a secondary provider
+ * used automatically when AeroAPI errors or its budget is exhausted; set to
+ * "none" to disable.
  */
 export function getProvider(): FlightProvider {
   if (cached) return cached;
@@ -24,9 +30,7 @@ export function getProvider(): FlightProvider {
       cached = new MockProvider();
       break;
     case "flightaware":
-      // Implemented in M3. Until then, avoid a hard crash.
-      console.warn("DATA_PROVIDER=flightaware not implemented yet; using mock.");
-      cached = new MockProvider();
+      cached = withFallback(new FlightAwareProvider());
       break;
     case "opensky":
     default:
@@ -34,4 +38,17 @@ export function getProvider(): FlightProvider {
       break;
   }
   return cached;
+}
+
+function withFallback(primary: FlightProvider): FlightProvider {
+  const choice = (process.env.AERO_FALLBACK ?? "opensky").toLowerCase();
+  switch (choice) {
+    case "none":
+      return primary;
+    case "mock":
+      return new FallbackProvider(primary, new MockProvider());
+    case "opensky":
+    default:
+      return new FallbackProvider(primary, new OpenSkyProvider());
+  }
 }

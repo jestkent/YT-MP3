@@ -21,7 +21,7 @@ export default function Home() {
           ✈ Realtime Flight Tracker
         </div>
         <div style={{ fontSize: 12, opacity: 0.6, marginTop: 2 }}>
-          M3 · AeroAPI ready
+          M4 · live map
         </div>
       </header>
       <FlightMap />

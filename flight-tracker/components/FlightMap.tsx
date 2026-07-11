@@ -6,6 +6,7 @@ import type {
   Map as MapLibreMap,
   GeoJSONSource,
   StyleSpecification,
+  ExpressionSpecification,
 } from "maplibre-gl";
 import type { Aircraft } from "@/lib/types";
 
@@ -62,7 +63,10 @@ type Track = {
   props: Aircraft;
 };
 
-/** Draw a north-pointing arrow once and register it as a map icon. */
+/**
+ * Draw a north-pointing arrow once and register it as an SDF map icon, so
+ * `icon-color` can tint each plane by altitude at render time.
+ */
 function addPlaneIcon(map: MapLibreMap) {
   if (map.hasImage("plane")) return;
   const size = 36;
@@ -77,13 +81,24 @@ function addPlaneIcon(map: MapLibreMap) {
   ctx.lineTo(size / 2, size * 0.72);
   ctx.lineTo(size * 0.18, size - 4);
   ctx.closePath();
-  ctx.fillStyle = "#ffd23f";
+  ctx.fillStyle = "#ffffff"; // white mask; tinted via icon-color
   ctx.fill();
-  ctx.lineWidth = 1.5;
-  ctx.strokeStyle = "rgba(0,0,0,0.55)";
-  ctx.stroke();
-  map.addImage("plane", ctx.getImageData(0, 0, size, size), { pixelRatio: 2 });
+  map.addImage("plane", ctx.getImageData(0, 0, size, size), {
+    pixelRatio: 2,
+    sdf: true,
+  });
 }
+
+// Altitude (feet) -> color ramp: low = blue, cruise = amber, high = red.
+const ALTITUDE_COLOR = [
+  "interpolate",
+  ["linear"],
+  ["coalesce", ["get", "altitude"], 0],
+  0, "#4aa8ff",
+  15000, "#46d39a",
+  30000, "#ffd23f",
+  40000, "#ff6b6b",
+] as const;
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
@@ -206,6 +221,24 @@ export default function FlightMap() {
         if (cancelled || started) return;
         if (!map.getStyle()) throw new Error("style not ready");
         started = true;
+        // Offline vector basemap: real country land/borders with no external
+        // tiles. Inserted beneath the raster layer, so nicer tiles cover it
+        // when they load, but the map still reads as a map if they don't.
+        map.addSource("world", { type: "geojson", data: "/world-110m.geojson" });
+        map.addLayer(
+          { id: "world-fill", type: "fill", source: "world", paint: { "fill-color": "#141a26" } },
+          "carto"
+        );
+        map.addLayer(
+          {
+            id: "world-line",
+            type: "line",
+            source: "world",
+            paint: { "line-color": "#26303f", "line-width": 0.6 },
+          },
+          "carto"
+        );
+
         addPlaneIcon(map);
         map.addSource("aircraft", {
           type: "geojson",
@@ -221,6 +254,9 @@ export default function FlightMap() {
             "icon-rotation-alignment": "map",
             "icon-allow-overlap": true,
             "icon-size": ["interpolate", ["linear"], ["zoom"], 3, 0.5, 7, 0.8, 11, 1.15],
+          },
+          paint: {
+            "icon-color": ALTITUDE_COLOR as unknown as ExpressionSpecification,
           },
         });
 
@@ -326,6 +362,21 @@ export default function FlightMap() {
         {status.error && (
           <div style={{ color: "#ff7a7a", marginTop: 4, maxWidth: 220 }}>{status.error}</div>
         )}
+        <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+          <div style={{ opacity: 0.6, marginBottom: 3 }}>altitude</div>
+          <div
+            style={{
+              height: 6,
+              borderRadius: 3,
+              background:
+                "linear-gradient(90deg,#4aa8ff 0%,#46d39a 37%,#ffd23f 75%,#ff6b6b 100%)",
+            }}
+          />
+          <div style={{ display: "flex", justifyContent: "space-between", opacity: 0.55, marginTop: 2 }}>
+            <span>0</span>
+            <span>40k ft</span>
+          </div>
+        </div>
       </div>
     </>
   );

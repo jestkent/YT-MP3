@@ -10,7 +10,17 @@ See [`PLAN.md`](./PLAN.md) for the full architecture and roadmap.
 - **M1 — Data layer ✅** Pluggable `FlightProvider` (`opensky` / `mock` / `flightaware`), `/api/positions?bbox`, aircraft rendered as heading-rotated icons with polling + click popups.
 - **M2 — Realtime ✅** Server-side poller fans one upstream fetch per map region out to all clients over SSE (`/api/stream`); client interpolates positions each frame so planes glide smoothly between updates.
 - **M3 — FlightAware AeroAPI ✅** Real `flightaware` provider (`/flights/search/positions`, key server-side only) with a monthly request-budget cost guard and automatic fallback to OpenSky/mock when AeroAPI errors or its budget is hit.
-- M4 — Polish (altitude coloring, clustering, labels, mobile).
+- **M4 — Polish (in progress)** Offline vector basemap (real country outlines with no external tiles, so the map always renders); planes colored by altitude with a legend. Next: labels (needs bundled glyphs), clustering at low zoom, mobile layout.
+
+## Offline basemap
+
+`public/world-110m.geojson` (country polygons) ships in the repo so the map
+renders land/borders even when raster tiles are slow or blocked. Regenerate it
+with:
+
+```bash
+node scripts/gen-basemap.mjs   # from world-atlas (devDependency)
+```
 
 ## Getting started
 
